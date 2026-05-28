@@ -6,7 +6,11 @@ import os
 
 router = APIRouter()
 
-MODEL_PATH = "backend/ml/triage_model"
+
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "ml", "triage_model")
+
+tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
 
 # Load model once at startup
 print("Loading triage model...")
