@@ -1,0 +1,30 @@
+# Python
+backend/__pycache__/
+backend/api/__pycache__/
+backend/ml/__pycache__/
+backend/.env
+venv/
+
+# Node
+frontend/node_modules/
+frontend/.env
+frontend/build/
+
+# General
+.DS_Store
+*.pyc
+backend/ml/triage_model/
+
+backend/ml/__pycache__/
+
+*.safetensors
+
+*.bin
+
+*.pt
+
+*.pth
+
+*.wav
+
+*.mp3
