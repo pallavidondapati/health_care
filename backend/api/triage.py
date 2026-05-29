@@ -1,20 +1,9 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 import os
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_PATH = os.path.join(BASE_DIR, "ml", "triage_model")
-
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-
-# Load model once at startup
-print("Loading triage model...")
-tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH)
-model.eval()
-print("Triage model loaded!")
+router = APIRouter()  # ✅ was missing
 
 LABELS = {0: "low", 1: "moderate", 2: "high", 3: "emergency"}
 
@@ -25,11 +14,65 @@ ADVICE = {
     "emergency": "This is a medical emergency! Call 108 immediately or go to the nearest emergency room now."
 }
 
+# ✅ Load model safely — won't crash if model files missing
+tokenizer = None
+model = None
+
+try:
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    MODEL_PATH = os.path.join(BASE_DIR, "ml", "triage_model")
+
+    if os.path.exists(MODEL_PATH):
+        print("Loading triage model...")
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH)
+        model.eval()
+        print("Triage model loaded!")
+    else:
+        print("⚠️ Triage model not found — using rule-based fallback")
+except Exception as e:
+    print(f"⚠️ Triage model load failed: {e} — using rule-based fallback")
+
+
+def rule_based_triage(symptoms: list[str], severity_hint: str = None) -> tuple[str, float]:
+    """Fallback when model is not available"""
+    symptoms_text = " ".join(symptoms).lower()
+
+    emergency_keywords = [
+        "chest pain", "cannot breathe", "unconscious",
+        "heart attack", "stroke", "severe bleeding"
+    ]
+    high_keywords = [
+        "difficulty breathing", "breathlessness", "high fever",
+        "seizure", "blood in stool", "blood in urine"
+    ]
+    moderate_keywords = [
+        "fever", "vomiting", "diarrhea", "stomach pain",
+        "headache", "body pain", "cough", "sore throat",
+        "high blood pressure", "diabetes", "weakness"
+    ]
+
+    if any(k in symptoms_text for k in emergency_keywords):
+        return "emergency", 0.95
+    if any(k in symptoms_text for k in high_keywords):
+        return "high", 0.85
+    if any(k in symptoms_text for k in moderate_keywords):
+        return "moderate", 0.75
+
+    if severity_hint:
+        hint_map = {"mild": "low", "moderate": "moderate", "severe": "high"}
+        return hint_map.get(severity_hint, "low"), 0.60
+
+    return "low", 0.50
+
+
 class TriageRequest(BaseModel):
     symptoms: list[str]
     duration: str | None = None
     severity_hint: str | None = None
     is_emergency: bool = False
+
 
 @router.post("/triage")
 async def triage(request: TriageRequest):
@@ -46,32 +89,44 @@ async def triage(request: TriageRequest):
             "call_108": True
         }
 
-    # Build input text from symptoms
-    input_text = ", ".join(request.symptoms)
-    if request.duration:
-        input_text += f" for {request.duration}"
+    # ✅ Use ML model if available, else rule-based fallback
+    if model is not None and tokenizer is not None:
+        try:
+            input_text = ", ".join(request.symptoms)
+            if request.duration:
+                input_text += f" for {request.duration}"
 
-    # Tokenize and predict
-    inputs = tokenizer(
-        input_text,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=128
-    )
+            inputs = tokenizer(
+                input_text,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=128
+            )
 
-    with torch.no_grad():
-        outputs = model(**inputs)
-        probs = torch.softmax(outputs.logits, dim=-1)
-        predicted_class = torch.argmax(probs, dim=-1).item()
-        confidence = probs[0][predicted_class].item()
+            with torch.no_grad():
+                outputs = model(**inputs)
+                probs = torch.softmax(outputs.logits, dim=-1)
+                predicted_class = torch.argmax(probs, dim=-1).item()
+                confidence = probs[0][predicted_class].item()
 
-    severity = LABELS[predicted_class]
+            severity = LABELS[predicted_class]
 
-    # Override with severity_hint if model confidence is low
-    if confidence < 0.6 and request.severity_hint:
-        hint_map = {"mild": "low", "moderate": "moderate", "severe": "high"}
-        severity = hint_map.get(request.severity_hint, severity)
+            # Override with hint if confidence is low
+            if confidence < 0.6 and request.severity_hint:
+                hint_map = {"mild": "low", "moderate": "moderate", "severe": "high"}
+                severity = hint_map.get(request.severity_hint, severity)
+
+        except Exception as e:
+            print(f"Model inference failed: {e} — using fallback")
+            severity, confidence = rule_based_triage(
+                request.symptoms, request.severity_hint
+            )
+    else:
+        # Rule-based fallback
+        severity, confidence = rule_based_triage(
+            request.symptoms, request.severity_hint
+        )
 
     return {
         "severity": severity,
