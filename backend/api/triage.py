@@ -13,25 +13,26 @@ ADVICE = {
     "emergency": "This is a medical emergency! Call 108 immediately or go to the nearest emergency room now."
 }
 
-# ✅ Safe import — won't crash on Render without torch
 tokenizer = None
 model = None
 
-try:
-    import torch
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification
-    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    MODEL_PATH = os.path.join(BASE_DIR, "ml", "triage_model")
-    if os.path.exists(MODEL_PATH):
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+MODEL_PATH = os.path.join(BASE_DIR, "ml", "triage_model")
+
+# Only attempt to load if the folder actually exists locally
+if os.path.exists(MODEL_PATH) and os.path.isdir(MODEL_PATH):
+    try:
+        import torch
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification
         print("Loading triage model...")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-        model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH)
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH, local_files_only=True)
+        model = AutoModelForSequenceClassification.from_pretrained(MODEL_PATH, local_files_only=True)
         model.eval()
         print("Triage model loaded!")
-    else:
-        print("⚠️ Triage model not found — using rule-based fallback")
-except Exception as e:
-    print(f"⚠️ Triage model not available: {e} — using rule-based fallback")
+    except Exception as e:
+        print(f"⚠️ Triage model not available: {e} — using rule-based fallback")
+else:
+    print("⚠️ Triage model folder not found — using rule-based fallback")
 
 
 def rule_based_triage(symptoms: list, severity_hint: str = None) -> tuple:
@@ -80,7 +81,6 @@ async def triage(request: TriageRequest):
     if not request.symptoms:
         raise HTTPException(status_code=400, detail="No symptoms provided")
 
-    # Force emergency if flagged by symptom extractor
     if request.is_emergency:
         return {
             "severity": "emergency",
@@ -89,7 +89,6 @@ async def triage(request: TriageRequest):
             "call_108": True
         }
 
-    # ✅ Use ML model if available, else rule-based fallback
     if model is not None and tokenizer is not None:
         try:
             import torch
@@ -113,7 +112,6 @@ async def triage(request: TriageRequest):
 
             severity = LABELS[predicted_class]
 
-            # Override with hint if confidence is low
             if confidence < 0.6 and request.severity_hint:
                 hint_map = {"mild": "low", "moderate": "moderate", "severe": "high"}
                 severity = hint_map.get(request.severity_hint, severity)
