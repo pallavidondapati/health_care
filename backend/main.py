@@ -1,3 +1,5 @@
+import logging
+logging.basicConfig(level=logging.INFO)
 from fastapi import FastAPI
 from backend.api.speech import router as speech_router
 from backend.api.symptom import router as symptom_router
