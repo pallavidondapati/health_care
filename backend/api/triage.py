@@ -1,9 +1,8 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-import torch
 import os
 
-router = APIRouter()  # ✅ was missing
+router = APIRouter()
 
 LABELS = {0: "low", 1: "moderate", 2: "high", 3: "emergency"}
 
@@ -14,15 +13,15 @@ ADVICE = {
     "emergency": "This is a medical emergency! Call 108 immediately or go to the nearest emergency room now."
 }
 
-# ✅ Load model safely — won't crash if model files missing
+# ✅ Safe import — won't crash on Render without torch
 tokenizer = None
 model = None
 
 try:
+    import torch
     from transformers import AutoTokenizer, AutoModelForSequenceClassification
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     MODEL_PATH = os.path.join(BASE_DIR, "ml", "triage_model")
-
     if os.path.exists(MODEL_PATH):
         print("Loading triage model...")
         tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
@@ -32,25 +31,26 @@ try:
     else:
         print("⚠️ Triage model not found — using rule-based fallback")
 except Exception as e:
-    print(f"⚠️ Triage model load failed: {e} — using rule-based fallback")
+    print(f"⚠️ Triage model not available: {e} — using rule-based fallback")
 
 
-def rule_based_triage(symptoms: list[str], severity_hint: str = None) -> tuple[str, float]:
-    """Fallback when model is not available"""
+def rule_based_triage(symptoms: list, severity_hint: str = None) -> tuple:
+    """Rule-based fallback when ML model not available"""
     symptoms_text = " ".join(symptoms).lower()
 
     emergency_keywords = [
         "chest pain", "cannot breathe", "unconscious",
-        "heart attack", "stroke", "severe bleeding"
+        "heart attack", "stroke", "severe bleeding", "convulsion", "seizure"
     ]
     high_keywords = [
         "difficulty breathing", "breathlessness", "high fever",
-        "seizure", "blood in stool", "blood in urine"
+        "blood in stool", "blood in urine", "severe headache", "sudden numbness"
     ]
     moderate_keywords = [
-        "fever", "vomiting", "diarrhea", "stomach pain",
-        "headache", "body pain", "cough", "sore throat",
-        "high blood pressure", "diabetes", "weakness"
+        "fever", "vomiting", "diarrhea", "stomach pain", "loose motions",
+        "headache", "body pain", "cough", "sore throat", "nausea",
+        "high blood pressure", "diabetes", "weakness", "fatigue",
+        "acidity", "indigestion", "cold", "runny nose"
     ]
 
     if any(k in symptoms_text for k in emergency_keywords):
@@ -92,6 +92,7 @@ async def triage(request: TriageRequest):
     # ✅ Use ML model if available, else rule-based fallback
     if model is not None and tokenizer is not None:
         try:
+            import torch
             input_text = ", ".join(request.symptoms)
             if request.duration:
                 input_text += f" for {request.duration}"
@@ -123,7 +124,6 @@ async def triage(request: TriageRequest):
                 request.symptoms, request.severity_hint
             )
     else:
-        # Rule-based fallback
         severity, confidence = rule_based_triage(
             request.symptoms, request.severity_hint
         )
